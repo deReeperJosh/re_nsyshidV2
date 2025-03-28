@@ -15,4 +15,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the Docker image
-      run: docker build . -t re_nsyshid_builder | docker run -it --rm -v ${PWD}:/project re_nsyshid_builder make
+      run: |
+        docker build -t re_nsyshid_builder .
+        docker run --rm -v ${PWD}:/project re_nsyshid_builder make
