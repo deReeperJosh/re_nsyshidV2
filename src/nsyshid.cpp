@@ -18,15 +18,16 @@
 #include "utils/logger.h"
 
 std::thread hotplugThread;
+bool hotplugThreadStop = false;
 
 std::list<HIDClient *> clients;
 std::map<HIDClient *, HIDAttachCallback> clientCallbacks;
 std::mutex clientMutex;
 
 std::list<std::shared_ptr<Device>> devices;
-std::list<HIDDevice*> addedDevices;
-std::list<HIDDevice*> removedDevices;
-std::map<HIDDevice*, HIDClient*> devicePairings;
+std::list<HIDDevice *> addedDevices;
+std::list<HIDDevice *> removedDevices;
+std::map<HIDDevice *, HIDClient *> devicePairings;
 std::mutex deviceMutex;
 
 std::recursive_mutex hidMutex;
@@ -106,46 +107,49 @@ std::shared_ptr<Device> GetDeviceByHandle(uint32_t handle) {
 }
 
 void DeviceHotplugThread() {
-    clientMutex.lock();
-    deviceMutex.lock();
-    if (!clients.empty()) {
-        for (auto client = clients.begin(); client != clients.end(); client++) {
-            for (auto device = addedDevices.begin(); device != addedDevices.end(); device++) {
-                const auto callback = clientCallbacks.find(*client);
-                int32_t result = callback->second(*client, *device, HID_DEVICE_ATTACH);
-                if (result == 1) {
-                    devicePairings.insert({*device, *client});
+    do {
+        clientMutex.lock();
+        deviceMutex.lock();
+        if (!clients.empty()) {
+            for (auto client = clients.begin(); client != clients.end(); client++) {
+                for (auto device = addedDevices.begin(); device != addedDevices.end(); device++) {
+                    const auto callback = clientCallbacks.find(*client);
+                    int32_t result      = callback->second(*client, *device, HID_DEVICE_ATTACH);
+                    if (result == 1) {
+                        devicePairings.insert({*device, *client});
+                    }
                 }
             }
         }
-    }
-    for (auto device = removedDevices.begin(); device != removedDevices.end(); device++) {
-        const auto client = devicePairings.find(*device);
-        if (client != devicePairings.end()) {
-            client->second->attachCallback(client->second, *device, HID_DEVICE_DETACH);
+        for (auto device = removedDevices.begin(); device != removedDevices.end(); device++) {
+            const auto client = devicePairings.find(*device);
+            if (client != devicePairings.end()) {
+                client->second->attachCallback(client->second, *device, HID_DEVICE_DETACH);
+            }
         }
-    }
-    addedDevices.clear();
-    removedDevices.clear();
-    deviceMutex.unlock();
-    clientMutex.unlock();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        addedDevices.clear();
+        removedDevices.clear();
+        deviceMutex.unlock();
+        clientMutex.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    } while (!hotplugThreadStop);
 }
 
 DECL_FUNCTION(int32_t, HIDSetup) {
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDSetup Called");
 
-    auto skylanderDevice = std::make_shared<SkylanderUSBDevice>();
-    HIDDevice *devicePtr = GetFreeHID();
-    devicePtr->handle    = 1;
-    skylanderDevice->AssignHID(devicePtr);
-    deviceMutex.lock();
-    devices.push_back(skylanderDevice);
+    // auto skylanderDevice = std::make_shared<SkylanderUSBDevice>();
+    // HIDDevice *devicePtr = GetFreeHID();
+    // devicePtr->handle    = 1;
+    // skylanderDevice->AssignHID(devicePtr);
+    // deviceMutex.lock();
+    // devices.push_back(skylanderDevice);
 
-    addedDevices.push_front(devicePtr);
-    deviceMutex.unlock();
+    // addedDevices.push_front(devicePtr);
+    // deviceMutex.unlock();
 
-    hotplugThread = std::thread(DeviceHotplugThread);
+    hotplugThreadStop = false;
+    hotplugThread     = std::thread(DeviceHotplugThread);
     hotplugThread.detach();
 
     return 0;
@@ -153,6 +157,7 @@ DECL_FUNCTION(int32_t, HIDSetup) {
 
 DECL_FUNCTION(int32_t, HIDTeardown) {
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDTeardown Called");
+    hotplugThreadStop = true;
     hotplugThread.join();
     return 0;
 }
@@ -473,17 +478,17 @@ DECL_FUNCTION(int32_t, HIDWrite, int32_t handle, uint8_t *buffer, uint32_t buffe
     return 0;
 }
 
-WUPS_MUST_REPLACE(HIDSetup,         WUPS_LOADER_LIBRARY_NSYSHID, HIDSetup);
-WUPS_MUST_REPLACE(HIDTeardown,      WUPS_LOADER_LIBRARY_NSYSHID, HIDTeardown);
-WUPS_MUST_REPLACE(HIDAddClient,     WUPS_LOADER_LIBRARY_NSYSHID, HIDAddClient);
-WUPS_MUST_REPLACE(HIDDelClient,     WUPS_LOADER_LIBRARY_NSYSHID, HIDDelClient);
+WUPS_MUST_REPLACE(HIDSetup, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetup);
+WUPS_MUST_REPLACE(HIDTeardown, WUPS_LOADER_LIBRARY_NSYSHID, HIDTeardown);
+WUPS_MUST_REPLACE(HIDAddClient, WUPS_LOADER_LIBRARY_NSYSHID, HIDAddClient);
+WUPS_MUST_REPLACE(HIDDelClient, WUPS_LOADER_LIBRARY_NSYSHID, HIDDelClient);
 WUPS_MUST_REPLACE(HIDGetDescriptor, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetDescriptor);
 WUPS_MUST_REPLACE(HIDSetDescriptor, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetDescriptor);
-WUPS_MUST_REPLACE(HIDGetReport,     WUPS_LOADER_LIBRARY_NSYSHID, HIDGetReport);
-WUPS_MUST_REPLACE(HIDSetReport,     WUPS_LOADER_LIBRARY_NSYSHID, HIDSetReport);
-WUPS_MUST_REPLACE(HIDGetIdle,       WUPS_LOADER_LIBRARY_NSYSHID, HIDGetIdle);
-WUPS_MUST_REPLACE(HIDSetIdle,       WUPS_LOADER_LIBRARY_NSYSHID, HIDSetIdle);
-WUPS_MUST_REPLACE(HIDGetProtocol,   WUPS_LOADER_LIBRARY_NSYSHID, HIDGetProtocol);
-WUPS_MUST_REPLACE(HIDSetProtocol,   WUPS_LOADER_LIBRARY_NSYSHID, HIDSetProtocol);
-WUPS_MUST_REPLACE(HIDRead,          WUPS_LOADER_LIBRARY_NSYSHID, HIDRead);
-WUPS_MUST_REPLACE(HIDWrite,         WUPS_LOADER_LIBRARY_NSYSHID, HIDWrite);
+WUPS_MUST_REPLACE(HIDGetReport, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetReport);
+WUPS_MUST_REPLACE(HIDSetReport, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetReport);
+WUPS_MUST_REPLACE(HIDGetIdle, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetIdle);
+WUPS_MUST_REPLACE(HIDSetIdle, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetIdle);
+WUPS_MUST_REPLACE(HIDGetProtocol, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetProtocol);
+WUPS_MUST_REPLACE(HIDSetProtocol, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetProtocol);
+WUPS_MUST_REPLACE(HIDRead, WUPS_LOADER_LIBRARY_NSYSHID, HIDRead);
+WUPS_MUST_REPLACE(HIDWrite, WUPS_LOADER_LIBRARY_NSYSHID, HIDWrite);
