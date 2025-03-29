@@ -19,7 +19,7 @@
     If not set correctly, the loader will refuse to use the plugin.
 **/
 WUPS_PLUGIN_NAME("re_nsyshid");
-WUPS_PLUGIN_DESCRIPTION("This is just an example plugin written in C++");
+WUPS_PLUGIN_DESCRIPTION("Plugin to Emulate HID Devices");
 WUPS_PLUGIN_VERSION("v0.1");
 WUPS_PLUGIN_AUTHOR("deReeperJosh");
 WUPS_PLUGIN_LICENSE("GPLv2");
@@ -55,8 +55,6 @@ bool sLogFSOpen                    = LOF_FS_OPEN_DEFAULT_VALUE;
 int sIntegerRangeValue             = INTEGER_RANGE_DEFAULT_VALUE;
 ExampleOptions sExampleOptionValue = MULTIPLE_VALUES_DEFAULT_VALUE;
 
-static std::forward_list<WUPSButtonComboAPI::ButtonCombo> sButtonComboInstances;
-
 static WUPSButtonCombo_ComboHandle sPressDownExampleHandle(nullptr);
 static WUPSButtonCombo_ComboHandle sHoldExampleHandle(nullptr);
 
@@ -89,7 +87,7 @@ void integerRangeItemChanged(ConfigItemIntegerRange *item, int newValue) {
     }
 }
 
-void multipleValueItemChanged(ConfigItemIntegerRange *item, uint32_t newValue) {
+void multipleValueItemChanged(ConfigItemMultipleValues *item, uint32_t newValue) {
     DEBUG_FUNCTION_LINE_INFO("New value in multipleValueItemChanged: %d", newValue);
     // If the value has changed, we store it in the storage.
     if (std::string_view(MULTIPLE_VALUES_EXAMPLE_CONFIG_ID) == item->identifier) {
@@ -123,7 +121,7 @@ WUPSConfigAPICallbackStatus ConfigMenuOpenedCallback(WUPSConfigCategoryHandle ro
         root.add(WUPSConfigItemMultipleValues::CreateFromValue(MULTIPLE_VALUES_EXAMPLE_CONFIG_ID, "Select an option!",
                                                                MULTIPLE_VALUES_DEFAULT_VALUE, sExampleOptionValue,
                                                                possibleValues,
-                                                               nullptr));
+                                                               multipleValueItemChanged));
     } catch (std::exception &e) {
         DEBUG_FUNCTION_LINE_ERR("Creating config menu failed: %s", e.what());
         return WUPSCONFIG_API_CALLBACK_RESULT_ERROR;
@@ -157,7 +155,6 @@ INITIALIZE_PLUGIN() {
 **/
 DEINITIALIZE_PLUGIN() {
     // Remove all button combos from this plugin.
-    sButtonComboInstances.clear();
     DEBUG_FUNCTION_LINE("DEINITIALIZE_PLUGIN of re_nsyshid!");
 }
 

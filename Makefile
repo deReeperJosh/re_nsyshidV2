@@ -20,7 +20,7 @@ WUT_ROOT := $(DEVKITPRO)/wut
 #-------------------------------------------------------------------------------
 TARGET		:=	re_nsyshid
 BUILD		:=	build
-SOURCES		:=	src src/utils
+SOURCES		:=	src src/utils src/devices
 DATA		:=	data
 INCLUDES	:=	src
 
