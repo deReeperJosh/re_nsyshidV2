@@ -8,6 +8,7 @@
 #include <coreinit/time.h>
 
 #include <array>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -16,9 +17,17 @@
 #include "devices/Skylander.h"
 #include "utils/logger.h"
 
+std::thread hotplugThread;
+
 std::list<HIDClient *> clients;
+std::map<HIDClient *, HIDAttachCallback> clientCallbacks;
+std::mutex clientMutex;
 
 std::list<std::shared_ptr<Device>> devices;
+std::list<HIDDevice*> addedDevices;
+std::list<HIDDevice*> removedDevices;
+std::map<HIDDevice*, HIDClient*> devicePairings;
+std::mutex deviceMutex;
 
 std::recursive_mutex hidMutex;
 
@@ -50,7 +59,7 @@ void Device::AssignHID(HIDDevice *hid) {
         hid->interfaceIndex     = this->m_interfaceIndex;
         hid->subClass           = this->m_interfaceSubClass;
         hid->protocol           = this->m_protocol;
-        hid->physicalDeviceInst = 0x11223344;
+        hid->physicalDeviceInst = 0;
         hid->maxPacketSizeRx    = this->m_maxPacketSizeRX;
         hid->maxPacketSizeTx    = this->m_maxPacketSizeTX;
     }
@@ -96,34 +105,72 @@ std::shared_ptr<Device> GetDeviceByHandle(uint32_t handle) {
     return nullptr;
 }
 
+void DeviceHotplugThread() {
+    clientMutex.lock();
+    deviceMutex.lock();
+    if (!clients.empty()) {
+        for (auto client = clients.begin(); client != clients.end(); client++) {
+            for (auto device = addedDevices.begin(); device != addedDevices.end(); device++) {
+                const auto callback = clientCallbacks.find(*client);
+                int32_t result = callback->second(*client, *device, HID_DEVICE_ATTACH);
+                if (result == 1) {
+                    devicePairings.insert({*device, *client});
+                }
+            }
+        }
+    }
+    for (auto device = removedDevices.begin(); device != removedDevices.end(); device++) {
+        const auto client = devicePairings.find(*device);
+        if (client != devicePairings.end()) {
+            client->second->attachCallback(client->second, *device, HID_DEVICE_DETACH);
+        }
+    }
+    addedDevices.clear();
+    removedDevices.clear();
+    deviceMutex.unlock();
+    clientMutex.unlock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+}
+
 DECL_FUNCTION(int32_t, HIDSetup) {
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDSetup Called");
-    return 0;
-}
-
-DECL_FUNCTION(int32_t, HIDTeardown) {
-    DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDTeardown Called");
-    return 0;
-}
-
-DECL_FUNCTION(int32_t, HIDAddClient, HIDClient *client, HIDAttachCallback attachCallback) {
-    DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDAddClient Called");
-    client->attachCallback = attachCallback;
-    clients.push_front(client);
 
     auto skylanderDevice = std::make_shared<SkylanderUSBDevice>();
     HIDDevice *devicePtr = GetFreeHID();
     devicePtr->handle    = 1;
     skylanderDevice->AssignHID(devicePtr);
+    deviceMutex.lock();
     devices.push_back(skylanderDevice);
 
-    attachCallback(client, devicePtr, HID_DEVICE_ATTACH);
+    addedDevices.push_front(devicePtr);
+    deviceMutex.unlock();
+
+    hotplugThread = std::thread(DeviceHotplugThread);
+    hotplugThread.detach();
+
+    return 0;
+}
+
+DECL_FUNCTION(int32_t, HIDTeardown) {
+    DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDTeardown Called");
+    hotplugThread.join();
+    return 0;
+}
+
+DECL_FUNCTION(int32_t, HIDAddClient, HIDClient *client, HIDAttachCallback attachCallback) {
+    DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDAddClient Called");
+    clientMutex.lock();
+    client->attachCallback = attachCallback;
+    clients.push_front(client);
+    clientMutex.unlock();
     return 0;
 }
 
 DECL_FUNCTION(int32_t, HIDDelClient, HIDClient *client) {
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDDelClient Called");
+    clientMutex.lock();
     clients.remove(client);
+    clientMutex.unlock();
     return 0;
 }
 
@@ -146,6 +193,10 @@ DECL_FUNCTION(int32_t, HIDGetDescriptor, uint32_t handle, uint8_t descriptorType
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDGetDescriptor Called");
 
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
+
+    if (!device) {
+        return -111;
+    }
 
     if (callback != nullptr) {
         std::thread t(GetDescriptorAsync, device, descriptorType, descriptorIndex, languageId, buffer, bufferLength, callback, userContext);
@@ -174,6 +225,10 @@ DECL_FUNCTION(int32_t, HIDSetDescriptor, uint32_t handle, uint8_t descriptorType
 
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
 
+    if (!device) {
+        return -111;
+    }
+
     if (callback != nullptr) {
         std::thread t(SetDescriptorAsync, device, descriptorType, descriptorIndex, languageId, buffer, bufferLength, callback, userContext);
         t.detach();
@@ -200,6 +255,10 @@ DECL_FUNCTION(int32_t, HIDGetReport, uint32_t handle, uint8_t reportType, uint8_
 
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
 
+    if (!device) {
+        return -111;
+    }
+
     if (callback != nullptr) {
         std::thread t(GetReportAsync, device, reportType, reportId, buffer, bufferLength, callback, userContext);
         t.detach();
@@ -224,6 +283,10 @@ DECL_FUNCTION(int32_t, HIDSetReport, uint32_t handle, uint8_t reportType, uint8_
               uint8_t *buffer, uint32_t bufferLength, HIDCallback callback, void *userContext) {
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDSetReport Called");
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
+
+    if (!device) {
+        return -111;
+    }
 
     if (callback != nullptr) {
         std::thread t(SetReportAsync, device, reportType, reportId, buffer, bufferLength, callback, userContext);
@@ -250,6 +313,10 @@ DECL_FUNCTION(int32_t, HIDGetIdle, uint32_t handle, uint8_t interfaceIndex, uint
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDGetIdle Called");
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
 
+    if (!device) {
+        return -111;
+    }
+
     if (callback != nullptr) {
         std::thread t(GetIdleAsync, device, interfaceIndex, reportId, duration, callback, userContext);
         t.detach();
@@ -274,6 +341,10 @@ DECL_FUNCTION(int32_t, HIDSetIdle, uint32_t handle, uint8_t interfaceIndex, uint
               uint8_t duration, HIDCallback callback, void *userContext) {
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDSetIdle Called");
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
+
+    if (!device) {
+        return -111;
+    }
 
     if (callback != nullptr) {
         std::thread t(SetIdleAsync, device, interfaceIndex, reportId, duration, callback, userContext);
@@ -300,6 +371,10 @@ DECL_FUNCTION(int32_t, HIDGetProtocol, uint32_t handle, uint8_t interfaceIndex, 
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDGetProtocol Called");
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
 
+    if (!device) {
+        return -111;
+    }
+
     if (callback != nullptr) {
         std::thread t(GetProtocolAsync, device, interfaceIndex, protocol, callback, userContext);
         t.detach();
@@ -324,6 +399,10 @@ DECL_FUNCTION(int32_t, HIDSetProtocol, uint32_t handle, uint8_t interfaceIndex, 
               HIDCallback callback, void *userContext) {
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDSetProtocol Called");
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
+
+    if (!device) {
+        return -111;
+    }
 
     if (callback != nullptr) {
         std::thread t(SetProtocolAsync, device, interfaceIndex, protocol, callback, userContext);
@@ -350,6 +429,10 @@ DECL_FUNCTION(int32_t, HIDRead, uint32_t handle, uint8_t *buffer, uint32_t buffe
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDRead Called");
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
 
+    if (!device) {
+        return -111;
+    }
+
     if (callback != nullptr) {
         std::thread t(ReadAsync, device, buffer, bufferLength, callback, userContext);
         t.detach();
@@ -375,6 +458,10 @@ DECL_FUNCTION(int32_t, HIDWrite, int32_t handle, uint8_t *buffer, uint32_t buffe
     DEBUG_FUNCTION_LINE_INFO("nsyshid::HIDWrite Called");
     std::shared_ptr<Device> device = GetDeviceByHandle(handle);
 
+    if (!device) {
+        return -111;
+    }
+
     if (callback != nullptr) {
         std::thread t(WriteAsync, device, buffer, bufferLength, callback, userContext);
         t.detach();
@@ -386,17 +473,17 @@ DECL_FUNCTION(int32_t, HIDWrite, int32_t handle, uint8_t *buffer, uint32_t buffe
     return 0;
 }
 
-WUPS_MUST_REPLACE(HIDSetup, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetup);
-WUPS_MUST_REPLACE(HIDTeardown, WUPS_LOADER_LIBRARY_NSYSHID, HIDTeardown);
-WUPS_MUST_REPLACE(HIDAddClient, WUPS_LOADER_LIBRARY_NSYSHID, HIDAddClient);
-WUPS_MUST_REPLACE(HIDDelClient, WUPS_LOADER_LIBRARY_NSYSHID, HIDDelClient);
+WUPS_MUST_REPLACE(HIDSetup,         WUPS_LOADER_LIBRARY_NSYSHID, HIDSetup);
+WUPS_MUST_REPLACE(HIDTeardown,      WUPS_LOADER_LIBRARY_NSYSHID, HIDTeardown);
+WUPS_MUST_REPLACE(HIDAddClient,     WUPS_LOADER_LIBRARY_NSYSHID, HIDAddClient);
+WUPS_MUST_REPLACE(HIDDelClient,     WUPS_LOADER_LIBRARY_NSYSHID, HIDDelClient);
 WUPS_MUST_REPLACE(HIDGetDescriptor, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetDescriptor);
 WUPS_MUST_REPLACE(HIDSetDescriptor, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetDescriptor);
-WUPS_MUST_REPLACE(HIDGetReport, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetReport);
-WUPS_MUST_REPLACE(HIDSetReport, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetReport);
-WUPS_MUST_REPLACE(HIDGetIdle, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetIdle);
-WUPS_MUST_REPLACE(HIDSetIdle, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetIdle);
-WUPS_MUST_REPLACE(HIDGetProtocol, WUPS_LOADER_LIBRARY_NSYSHID, HIDGetProtocol);
-WUPS_MUST_REPLACE(HIDSetProtocol, WUPS_LOADER_LIBRARY_NSYSHID, HIDSetProtocol);
-WUPS_MUST_REPLACE(HIDRead, WUPS_LOADER_LIBRARY_NSYSHID, HIDRead);
-WUPS_MUST_REPLACE(HIDWrite, WUPS_LOADER_LIBRARY_NSYSHID, HIDWrite);
+WUPS_MUST_REPLACE(HIDGetReport,     WUPS_LOADER_LIBRARY_NSYSHID, HIDGetReport);
+WUPS_MUST_REPLACE(HIDSetReport,     WUPS_LOADER_LIBRARY_NSYSHID, HIDSetReport);
+WUPS_MUST_REPLACE(HIDGetIdle,       WUPS_LOADER_LIBRARY_NSYSHID, HIDGetIdle);
+WUPS_MUST_REPLACE(HIDSetIdle,       WUPS_LOADER_LIBRARY_NSYSHID, HIDSetIdle);
+WUPS_MUST_REPLACE(HIDGetProtocol,   WUPS_LOADER_LIBRARY_NSYSHID, HIDGetProtocol);
+WUPS_MUST_REPLACE(HIDSetProtocol,   WUPS_LOADER_LIBRARY_NSYSHID, HIDSetProtocol);
+WUPS_MUST_REPLACE(HIDRead,          WUPS_LOADER_LIBRARY_NSYSHID, HIDRead);
+WUPS_MUST_REPLACE(HIDWrite,         WUPS_LOADER_LIBRARY_NSYSHID, HIDWrite);

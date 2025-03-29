@@ -8,7 +8,7 @@
 
 SkylanderPortal g_skyportal;
 
-SkylanderUSBDevice::SkylanderUSBDevice() : Device(0x1430, 0x0150, 1, 2, 0, 0x40, 0x40) {
+SkylanderUSBDevice::SkylanderUSBDevice() : Device(0x3014, 0x5001, 0, 0, 0, 0x40, 0x40) {
 }
 
 SkylanderUSBDevice::~SkylanderUSBDevice() = default;
@@ -26,8 +26,8 @@ bool SkylanderUSBDevice::GetDescriptor(uint8_t descType,
     currentWritePtr                    = configurationDescriptor + 0;
     *(uint8_t *) (currentWritePtr + 0) = 9;    // bLength
     *(uint8_t *) (currentWritePtr + 1) = 2;    // bDescriptorType
-    *(uint8_t *) (currentWritePtr + 2) = 0x00; // wTotalLength
-    *(uint8_t *) (currentWritePtr + 3) = 0x29; // wTotalLength
+    *(uint8_t *) (currentWritePtr + 2) = 0x29; // wTotalLength
+    *(uint8_t *) (currentWritePtr + 3) = 0x00; // wTotalLength
     *(uint8_t *) (currentWritePtr + 4) = 1;    // bNumInterfaces
     *(uint8_t *) (currentWritePtr + 5) = 1;    // bConfigurationValue
     *(uint8_t *) (currentWritePtr + 6) = 0;    // iConfiguration
@@ -48,21 +48,21 @@ bool SkylanderUSBDevice::GetDescriptor(uint8_t descType,
     // HID descriptor
     *(uint8_t *) (currentWritePtr + 0) = 9;    // bLength
     *(uint8_t *) (currentWritePtr + 1) = 0x21; // bDescriptorType
-    *(uint8_t *) (currentWritePtr + 2) = 0x01; // bcdHID
-    *(uint8_t *) (currentWritePtr + 3) = 0x11; // bcdHID
+    *(uint8_t *) (currentWritePtr + 2) = 0x11; // bcdHID
+    *(uint8_t *) (currentWritePtr + 3) = 0x01; // bcdHID
     *(uint8_t *) (currentWritePtr + 4) = 0x00; // bCountryCode
     *(uint8_t *) (currentWritePtr + 5) = 0x01; // bNumDescriptors
     *(uint8_t *) (currentWritePtr + 6) = 0x22; // bDescriptorType
-    *(uint8_t *) (currentWritePtr + 7) = 0x00; // wDescriptorLength
-    *(uint8_t *) (currentWritePtr + 8) = 0x1D; // wDescriptorLength
+    *(uint8_t *) (currentWritePtr + 7) = 0x1D; // wDescriptorLength
+    *(uint8_t *) (currentWritePtr + 8) = 0x00; // wDescriptorLength
     currentWritePtr                    = currentWritePtr + 9;
     // endpoint descriptor 1
     *(uint8_t *) (currentWritePtr + 0) = 7;    // bLength
     *(uint8_t *) (currentWritePtr + 1) = 0x05; // bDescriptorType
     *(uint8_t *) (currentWritePtr + 2) = 0x81; // bEndpointAddress
     *(uint8_t *) (currentWritePtr + 3) = 0x03; // bmAttributes
-    *(uint8_t *) (currentWritePtr + 4) = 0x00; // wMaxPacketSize
-    *(uint8_t *) (currentWritePtr + 5) = 0x40; // wMaxPacketSize
+    *(uint8_t *) (currentWritePtr + 4) = 0x40; // wMaxPacketSize
+    *(uint8_t *) (currentWritePtr + 5) = 0x00; // wMaxPacketSize
     *(uint8_t *) (currentWritePtr + 6) = 0x01; // bInterval
     currentWritePtr                    = currentWritePtr + 7;
     // endpoint descriptor 2
@@ -70,8 +70,8 @@ bool SkylanderUSBDevice::GetDescriptor(uint8_t descType,
     *(uint8_t *) (currentWritePtr + 1) = 0x05; // bDescriptorType
     *(uint8_t *) (currentWritePtr + 2) = 0x02; // bEndpointAddress
     *(uint8_t *) (currentWritePtr + 3) = 0x03; // bmAttributes
-    *(uint8_t *) (currentWritePtr + 4) = 0x00; // wMaxPacketSize
-    *(uint8_t *) (currentWritePtr + 5) = 0x40; // wMaxPacketSize
+    *(uint8_t *) (currentWritePtr + 4) = 0x40; // wMaxPacketSize
+    *(uint8_t *) (currentWritePtr + 5) = 0x00; // wMaxPacketSize
     *(uint8_t *) (currentWritePtr + 6) = 0x01; // bInterval
     currentWritePtr                    = currentWritePtr + 7;
 
@@ -115,23 +115,25 @@ bool SkylanderUSBDevice::SetIdle(uint8_t ifIndex,
 
 bool SkylanderUSBDevice::GetProtocol(uint8_t ifIndex,
                                      uint8_t *protocol) {
+    protocol[0] = m_protocol;
     return true;
 }
 
 bool SkylanderUSBDevice::SetProtocol(uint8_t ifIndex,
                                      uint8_t protocol) {
+    m_protocol = protocol;
     return true;
 }
 
 bool SkylanderUSBDevice::Read(uint8_t *buffer,
                               uint32_t bufferLength) {
+    memcpy(buffer, g_skyportal.GetStatus().data(), bufferLength);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return true;
 }
 
 bool SkylanderUSBDevice::Write(uint8_t *buffer,
                                uint32_t bufferLength) {
-    memcpy(buffer, g_skyportal.GetStatus().data(), bufferLength);
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return true;
 }
 
